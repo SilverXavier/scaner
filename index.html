@@ -5,11 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Control de Caducidades</title>
     
-    <!-- Librerías de FullCalendar (Modo Oscuro/Estándar) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
-
-    <!-- Librería para lectura de Código de Barras / QR -->
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
     <style>
@@ -99,6 +96,22 @@
             font-size: 18px;
             cursor: pointer;
         }
+
+        .manual-container {
+            margin: 15px 0 5px 0; 
+            display: flex; 
+            gap: 8px;
+        }
+
+        .manual-input {
+            flex: 1; 
+            padding: 10px; 
+            border-radius: 8px; 
+            border: 1px solid var(--border-color); 
+            background: #2a2a2a; 
+            color: white; 
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -111,13 +124,19 @@
         <div class="modal-content">
             <h3 id="modalTitle">Opciones del día</h3>
             
+            <!-- Entrada manual de código -->
+            <div class="manual-container">
+                <input type="number" id="manualBarcodeInput" class="manual-input" placeholder="Ingresar código manualmente...">
+                <button class="btn" onclick="handleManualSearch()" style="margin: 0; width: auto; padding: 10px 15px;">🔍</button>
+            </div>
+
             <div id="productList"></div>
             
             <div id="scannerSection" style="display:none; margin-top:15px;">
                 <div id="reader"></div>
             </div>
 
-            <button class="btn" id="btnScanToggle">Escanear Artículo</button>
+            <button class="btn" id="btnScanToggle">Escanear por Cámara</button>
             <button class="btn" style="background-color: #555;" onclick="closeModal()">Cerrar</button>
         </div>
     </div>
@@ -126,6 +145,26 @@
         let calendar;
         let selectedDateStr = "";
         let html5QrcodeScanner = null;
+
+        function playBeep() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+
+                osc.type = "sine";
+                osc.frequency.value = 800;
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.15);
+            } catch (e) {
+                console.log("Audio no disponible.");
+            }
+        }
 
         document.addEventListener('DOMContentLoaded', function() {
             const calendarEl = document.getElementById('calendar');
@@ -146,6 +185,7 @@
         function openDayActions(dateStr) {
             selectedDateStr = dateStr;
             document.getElementById('modalTitle').innerText = `Día: ${dateStr}`;
+            document.getElementById('manualBarcodeInput').value = "";
             updateProductList();
             document.getElementById('actionModal').style.display = 'flex';
         }
@@ -187,17 +227,32 @@
 
         function startScanner() {
             html5QrcodeScanner = new Html5Qrcode("reader");
+
+            const config = {
+                fps: 20,
+                qrbox: { width: 280, height: 120 },
+                formatsToSupport: [
+                    Html5QrcodeSupportedFormats.EAN_13,
+                    Html5QrcodeSupportedFormats.EAN_8,
+                    Html5QrcodeSupportedFormats.UPC_A,
+                    Html5QrcodeSupportedFormats.UPC_E,
+                    Html5QrcodeSupportedFormats.CODE_128
+                ]
+            };
+
             html5QrcodeScanner.start(
                 { facingMode: "environment" },
-                { fps: 10, qrbox: { width: 250, height: 150 } },
+                config,
                 async (decodedText) => {
+                    playBeep();
                     stopScanner();
+                    
                     let nombreProducto = await fetchProductName(decodedText);
                     if(nombreProducto) {
                         saveItem(nombreProducto, decodedText);
                     }
                 },
-                (errorMessage) => { /* Ignorar errores de escaneo continuo */ }
+                (errorMessage) => {}
             ).catch(err => alert("Error al abrir cámara: Asegúrate de otorgar permisos."));
         }
 
@@ -208,7 +263,24 @@
             }
         }
 
-        // Consulta a la API oficial de Open Food Facts v0
+        async function handleManualSearch() {
+            const input = document.getElementById('manualBarcodeInput');
+            const barcode = input.value.trim();
+
+            if (!barcode) {
+                alert("Ingresa un número de código de barras.");
+                return;
+            }
+
+            playBeep();
+            let nombreProducto = await fetchProductName(barcode);
+            
+            if (nombreProducto) {
+                saveItem(nombreProducto, barcode);
+                input.value = "";
+            }
+        }
+
         async function fetchProductName(barcode) {
             try {
                 const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
@@ -219,7 +291,7 @@
                 if (data.status === 1 && data.product && (data.product.product_name || data.product.product_name_es)) {
                     return data.product.product_name_es || data.product.product_name;
                 } else {
-                    return prompt("Código desconocido en internet. Escribe un nombre para este artículo:");
+                    return prompt("Código no encontrado en la base de datos. Escribe un nombre manual:");
                 }
             } catch (error) {
                 return prompt("Sin conexión a internet. Escribe un nombre para este artículo:");
