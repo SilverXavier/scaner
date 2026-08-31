@@ -5,13 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Control de Caducidades</title>
     
-    <!-- Configuración PWA para instalación en Android / iOS -->
     <meta name="theme-color" content="#ff4757">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Caducidades">
 
-    <!-- Librerías desde CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -37,7 +34,6 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            max-width: 100%;
             margin-bottom: 10px;
         }
 
@@ -75,6 +71,8 @@
             text-align: center;
             border: 1px solid var(--border-color);
             box-sizing: border-box;
+            max-height: 85vh;
+            overflow-y: auto;
         }
 
         #reader {
@@ -109,8 +107,21 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px 0;
+            padding: 10px 0;
             border-bottom: 1px solid var(--border-color);
+            text-align: left;
+        }
+
+        .product-info {
+            cursor: pointer;
+            flex: 1;
+        }
+
+        .sku-tag {
+            font-size: 11px;
+            color: #888;
+            display: block;
+            margin-top: 2px;
         }
 
         .btn-delete {
@@ -119,6 +130,7 @@
             color: #ff6b6b;
             font-size: 18px;
             cursor: pointer;
+            padding-left: 10px;
         }
 
         .manual-container {
@@ -136,23 +148,33 @@
             color: white; 
             font-size: 14px;
         }
+
+        .product-img {
+            width: 100%;
+            max-height: 200px;
+            object-fit: contain;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: #000;
+        }
     </style>
 </head>
 <body>
 
     <div class="header-actions">
         <h2 style="color: var(--accent-color); margin: 0;">📅 Caducidades</h2>
-        <button class="btn btn-sm" onclick="requestNotificationPermission()">🔔 Activar Alertas</button>
+        <button class="btn btn-sm" onclick="requestNotificationPermission()">🔔 Alertas</button>
     </div>
     
     <div id="calendar"></div>
 
+    <!-- Modal Principal del Día -->
     <div id="actionModal" class="modal">
         <div class="modal-content">
             <h3 id="modalTitle">Opciones del día</h3>
             
             <div class="manual-container">
-                <input type="number" id="manualBarcodeInput" class="manual-input" placeholder="Ingresar código manualmente...">
+                <input type="number" id="manualBarcodeInput" class="manual-input" placeholder="Código de barras manual...">
                 <button class="btn" onclick="handleManualSearch()" style="margin: 0; width: auto; padding: 10px 15px;">🔍</button>
             </div>
 
@@ -167,12 +189,23 @@
         </div>
     </div>
 
+    <!-- Modal para Detalles del Producto -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <h3 id="detailTitle">Detalle del Producto</h3>
+            <img id="detailImg" src="" alt="Imagen" class="product-img" style="display:none;">
+            <p id="detailBrand" style="color:#aaa; margin: 5px 0;"></p>
+            <p id="detailSku" style="font-size: 12px; color:#666;"></p>
+            <p id="detailQuantity" style="font-weight: bold; color: var(--accent-color);"></p>
+            <button class="btn" style="background-color: #555;" onclick="closeDetailModal()">Volver</button>
+        </div>
+    </div>
+
     <script>
         let calendar;
         let selectedDateStr = "";
         let html5QrcodeScanner = null;
 
-        // Inyección dinámica de Manifest para habilitar instalación PWA
         const manifestData = {
             "name": "Control de Caducidades",
             "short_name": "Caducidades",
@@ -180,11 +213,7 @@
             "display": "standalone",
             "background_color": "#121212",
             "theme_color": "#ff4757",
-            "icons": [{
-                "src": "https://cdn-icons-png.flaticon.com/512/3652/3652191.png",
-                "sizes": "512x512",
-                "type": "image/png"
-            }]
+            "icons": [{"src": "https://cdn-icons-png.flaticon.com/512/3652/3652191.png", "sizes": "512x512", "type": "image/png"}]
         };
         const stringManifest = JSON.stringify(manifestData);
         const blob = new Blob([stringManifest], {type: 'application/json'});
@@ -218,44 +247,14 @@
                 dateClick: function(info) { openDayActions(info.dateStr); }
             });
             calendar.render();
-            
             renderEvents();
-            checkAndNotifyExpirations();
         });
 
-        // Solicitar permisos para Notificaciones Push del Sistema
         function requestNotificationPermission() {
             if ("Notification" in window) {
                 Notification.requestPermission().then(permission => {
-                    if (permission === "granted") {
-                        alert("¡Notificaciones activadas con éxito!");
-                        checkAndNotifyExpirations();
-                    } else {
-                        alert("Permiso denegado. No se podrán enviar alertas.");
-                    }
+                    if (permission === "granted") alert("¡Notificaciones activadas!");
                 });
-            } else {
-                alert("Tu navegador no soporta notificaciones de sistema.");
-            }
-        }
-
-        function checkAndNotifyExpirations() {
-            let db = JSON.parse(localStorage.getItem('caducidades')) || [];
-            const hoy = new Date().toISOString().split('T')[0];
-            let caducanHoy = db.filter(item => item.fecha === hoy);
-
-            if (caducanHoy.length > 0) {
-                const mensaje = `Tienes ${caducanHoy.length} producto(s) que caducan hoy: ${caducanHoy.map(i => i.nombre).join(', ')}`;
-                
-                // Si la app tiene permiso, manda notificación al sistema del celular
-                if ("Notification" in window && Notification.permission === "granted") {
-                    new Notification("⚠️ Alerta de Caducidad", {
-                        body: mensaje,
-                        icon: "https://cdn-icons-png.flaticon.com/512/3652/3652191.png"
-                    });
-                } else {
-                    alert(`⚠️ Alerta: ${mensaje}`);
-                }
             }
         }
 
@@ -272,6 +271,10 @@
             stopScanner();
         }
 
+        function closeDetailModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+
         function updateProductList() {
             const listDiv = document.getElementById('productList');
             listDiv.innerHTML = "";
@@ -286,10 +289,36 @@
             filtrados.forEach((item) => {
                 let div = document.createElement('div');
                 div.className = 'product-item';
-                div.innerHTML = `<span>🛒 ${item.nombre}</span> 
-                                 <button class="btn-delete" onclick="deleteItem('${item.id}')">🗑️</button>`;
+                div.innerHTML = `
+                    <div class="product-info" onclick="showProductDetail('${item.id}')">
+                        <strong>🛒 ${item.nombre} (x${item.cantidad || 1})</strong>
+                        <span class="sku-tag">SKU / Cód: ${item.codigo}</span>
+                    </div>
+                    <button class="btn-delete" onclick="deleteItem('${item.id}')">🗑️</button>`;
                 listDiv.appendChild(div);
             });
+        }
+
+        function showProductDetail(id) {
+            let db = JSON.parse(localStorage.getItem('caducidades')) || [];
+            let item = db.find(i => i.id === id);
+
+            if (!item) return;
+
+            document.getElementById('detailTitle').innerText = item.nombre;
+            document.getElementById('detailBrand').innerText = item.marca ? `Marca: ${item.marca}` : "Marca no especificada";
+            document.getElementById('detailSku').innerText = `SKU / Código: ${item.codigo}`;
+            document.getElementById('detailQuantity').innerText = `Cantidad registrada: ${item.cantidad || 1} ud(s).`;
+
+            const imgEl = document.getElementById('detailImg');
+            if (item.foto) {
+                imgEl.src = item.foto;
+                imgEl.style.display = 'block';
+            } else {
+                imgEl.style.display = 'none';
+            }
+
+            document.getElementById('detailModal').style.display = 'flex';
         }
 
         document.getElementById('btnScanToggle').addEventListener('click', function() {
@@ -322,11 +351,10 @@
                 async (decodedText) => {
                     playBeep();
                     stopScanner();
-                    let nombreProducto = await fetchProductName(decodedText);
-                    if(nombreProducto) saveItem(nombreProducto, decodedText);
+                    await processProductEntry(decodedText);
                 },
-                (errorMessage) => {}
-            ).catch(err => alert("Otorga permisos a la cámara para escanear."));
+                () => {}
+            ).catch(() => alert("Otorga permisos a la cámara para escanear."));
         }
 
         function stopScanner() {
@@ -346,32 +374,60 @@
             }
 
             playBeep();
-            let nombreProducto = await fetchProductName(barcode);
-            if (nombreProducto) {
-                saveItem(nombreProducto, barcode);
-                input.value = "";
+            await processProductEntry(barcode);
+            input.value = "";
+        }
+
+        async function processProductEntry(barcode) {
+            let productData = await fetchProductData(barcode);
+            
+            if (productData) {
+                let qtyInput = prompt(`Producto: "${productData.nombre}"\n¿Cuántas unidades deseas registrar?`, "1");
+                let cantidad = parseInt(qtyInput, 10);
+                
+                if (isNaN(cantidad) || cantidad <= 0) cantidad = 1;
+
+                saveItem(productData, barcode, cantidad);
             }
         }
 
-        async function fetchProductName(barcode) {
+        async function fetchProductData(barcode) {
             try {
                 const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
-                    headers: { 'User-Agent': 'MiAppCaducidades - WebApp - Version 1.0' }
+                    headers: { 'User-Agent': 'MiAppCaducidades - WebApp - Version 2.0' }
                 });
                 const data = await response.json();
-                if (data.status === 1 && data.product && (data.product.product_name || data.product.product_name_es)) {
-                    return data.product.product_name_es || data.product.product_name;
+
+                if (data.status === 1 && data.product) {
+                    const p = data.product;
+                    return {
+                        nombre: p.product_name_es || p.product_name || "Producto sin nombre",
+                        foto: p.image_front_url || p.image_url || "",
+                        marca: p.brands || ""
+                    };
                 } else {
-                    return prompt("Código no encontrado. Escribe un nombre manual:");
+                    let nombreManual = prompt("Código no encontrado en la API. Escribe un nombre para este artículo:");
+                    if (!nombreManual) return null;
+                    return { nombre: nombreManual, foto: "", marca: "" };
                 }
             } catch (error) {
-                return prompt("Sin conexión. Escribe un nombre manual:");
+                let nombreManual = prompt("Sin conexión a la API. Escribe un nombre para este artículo:");
+                if (!nombreManual) return null;
+                return { nombre: nombreManual, foto: "", marca: "" };
             }
         }
 
-        function saveItem(nombre, codigo) {
+        function saveItem(productData, codigo, cantidad) {
             let db = JSON.parse(localStorage.getItem('caducidades')) || [];
-            db.push({ id: Date.now().toString(), nombre: nombre, codigo: codigo, fecha: selectedDateStr });
+            db.push({
+                id: Date.now().toString(),
+                nombre: productData.nombre,
+                foto: productData.foto,
+                marca: productData.marca,
+                codigo: codigo,
+                cantidad: cantidad,
+                fecha: selectedDateStr
+            });
             localStorage.setItem('caducidades', JSON.stringify(db));
             updateProductList();
             renderEvents();
@@ -389,7 +445,11 @@
             calendar.removeAllEvents();
             let db = JSON.parse(localStorage.getItem('caducidades')) || [];
             db.forEach(item => {
-                calendar.addEvent({ title: item.nombre, start: item.fecha, allDay: true });
+                calendar.addEvent({
+                    title: `(x${item.cantidad || 1}) ${item.nombre}`,
+                    start: item.fecha,
+                    allDay: true
+                });
             });
         }
     </script>
