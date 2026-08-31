@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Control de Caducidades</title>
     
+    <!-- Configuración PWA para instalación en Android / iOS -->
+    <meta name="theme-color" content="#ff4757">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Caducidades">
+
+    <!-- Librerías desde CDN -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css">
     <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
@@ -24,6 +31,14 @@
             color: var(--text-color);
             margin: 0;
             padding: 10px;
+        }
+
+        .header-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 100%;
+            margin-bottom: 10px;
         }
 
         #calendar {
@@ -81,6 +96,15 @@
             width: 100%;
         }
 
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 12px;
+            margin-top: 0;
+            width: auto;
+            background-color: #333;
+            border: 1px solid var(--border-color);
+        }
+
         .product-item {
             display: flex;
             justify-content: space-between;
@@ -116,7 +140,10 @@
 </head>
 <body>
 
-    <h2 style="text-align: center; color: var(--accent-color);">📅 Mis Caducidades</h2>
+    <div class="header-actions">
+        <h2 style="color: var(--accent-color); margin: 0;">📅 Caducidades</h2>
+        <button class="btn btn-sm" onclick="requestNotificationPermission()">🔔 Activar Alertas</button>
+    </div>
     
     <div id="calendar"></div>
 
@@ -124,7 +151,6 @@
         <div class="modal-content">
             <h3 id="modalTitle">Opciones del día</h3>
             
-            <!-- Entrada manual de código -->
             <div class="manual-container">
                 <input type="number" id="manualBarcodeInput" class="manual-input" placeholder="Ingresar código manualmente...">
                 <button class="btn" onclick="handleManualSearch()" style="margin: 0; width: auto; padding: 10px 15px;">🔍</button>
@@ -146,24 +172,41 @@
         let selectedDateStr = "";
         let html5QrcodeScanner = null;
 
+        // Inyección dinámica de Manifest para habilitar instalación PWA
+        const manifestData = {
+            "name": "Control de Caducidades",
+            "short_name": "Caducidades",
+            "start_url": "./",
+            "display": "standalone",
+            "background_color": "#121212",
+            "theme_color": "#ff4757",
+            "icons": [{
+                "src": "https://cdn-icons-png.flaticon.com/512/3652/3652191.png",
+                "sizes": "512x512",
+                "type": "image/png"
+            }]
+        };
+        const stringManifest = JSON.stringify(manifestData);
+        const blob = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blob);
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = manifestURL;
+        document.head.appendChild(link);
+
         function playBeep() {
             try {
                 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 const osc = audioCtx.createOscillator();
                 const gain = audioCtx.createGain();
-
                 osc.type = "sine";
                 osc.frequency.value = 800;
                 gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-
                 osc.connect(gain);
                 gain.connect(audioCtx.destination);
-
                 osc.start();
                 osc.stop(audioCtx.currentTime + 0.15);
-            } catch (e) {
-                console.log("Audio no disponible.");
-            }
+            } catch (e) {}
         }
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -172,15 +215,49 @@
                 initialView: 'dayGridMonth',
                 locale: 'es',
                 headerToolbar: { left: 'prev', center: 'title', right: 'next' },
-                dateClick: function(info) {
-                    openDayActions(info.dateStr);
-                }
+                dateClick: function(info) { openDayActions(info.dateStr); }
             });
             calendar.render();
             
             renderEvents();
-            checkTodayExpirations();
+            checkAndNotifyExpirations();
         });
+
+        // Solicitar permisos para Notificaciones Push del Sistema
+        function requestNotificationPermission() {
+            if ("Notification" in window) {
+                Notification.requestPermission().then(permission => {
+                    if (permission === "granted") {
+                        alert("¡Notificaciones activadas con éxito!");
+                        checkAndNotifyExpirations();
+                    } else {
+                        alert("Permiso denegado. No se podrán enviar alertas.");
+                    }
+                });
+            } else {
+                alert("Tu navegador no soporta notificaciones de sistema.");
+            }
+        }
+
+        function checkAndNotifyExpirations() {
+            let db = JSON.parse(localStorage.getItem('caducidades')) || [];
+            const hoy = new Date().toISOString().split('T')[0];
+            let caducanHoy = db.filter(item => item.fecha === hoy);
+
+            if (caducanHoy.length > 0) {
+                const mensaje = `Tienes ${caducanHoy.length} producto(s) que caducan hoy: ${caducanHoy.map(i => i.nombre).join(', ')}`;
+                
+                // Si la app tiene permiso, manda notificación al sistema del celular
+                if ("Notification" in window && Notification.permission === "granted") {
+                    new Notification("⚠️ Alerta de Caducidad", {
+                        body: mensaje,
+                        icon: "https://cdn-icons-png.flaticon.com/512/3652/3652191.png"
+                    });
+                } else {
+                    alert(`⚠️ Alerta: ${mensaje}`);
+                }
+            }
+        }
 
         function openDayActions(dateStr) {
             selectedDateStr = dateStr;
@@ -227,7 +304,6 @@
 
         function startScanner() {
             html5QrcodeScanner = new Html5Qrcode("reader");
-
             const config = {
                 fps: 20,
                 qrbox: { width: 280, height: 120 },
@@ -246,14 +322,11 @@
                 async (decodedText) => {
                     playBeep();
                     stopScanner();
-                    
                     let nombreProducto = await fetchProductName(decodedText);
-                    if(nombreProducto) {
-                        saveItem(nombreProducto, decodedText);
-                    }
+                    if(nombreProducto) saveItem(nombreProducto, decodedText);
                 },
                 (errorMessage) => {}
-            ).catch(err => alert("Error al abrir cámara: Asegúrate de otorgar permisos."));
+            ).catch(err => alert("Otorga permisos a la cámara para escanear."));
         }
 
         function stopScanner() {
@@ -274,7 +347,6 @@
 
             playBeep();
             let nombreProducto = await fetchProductName(barcode);
-            
             if (nombreProducto) {
                 saveItem(nombreProducto, barcode);
                 input.value = "";
@@ -287,25 +359,19 @@
                     headers: { 'User-Agent': 'MiAppCaducidades - WebApp - Version 1.0' }
                 });
                 const data = await response.json();
-                
                 if (data.status === 1 && data.product && (data.product.product_name || data.product.product_name_es)) {
                     return data.product.product_name_es || data.product.product_name;
                 } else {
-                    return prompt("Código no encontrado en la base de datos. Escribe un nombre manual:");
+                    return prompt("Código no encontrado. Escribe un nombre manual:");
                 }
             } catch (error) {
-                return prompt("Sin conexión a internet. Escribe un nombre para este artículo:");
+                return prompt("Sin conexión. Escribe un nombre manual:");
             }
         }
 
         function saveItem(nombre, codigo) {
             let db = JSON.parse(localStorage.getItem('caducidades')) || [];
-            db.push({
-                id: Date.now().toString(),
-                nombre: nombre,
-                codigo: codigo,
-                fecha: selectedDateStr
-            });
+            db.push({ id: Date.now().toString(), nombre: nombre, codigo: codigo, fecha: selectedDateStr });
             localStorage.setItem('caducidades', JSON.stringify(db));
             updateProductList();
             renderEvents();
@@ -323,22 +389,8 @@
             calendar.removeAllEvents();
             let db = JSON.parse(localStorage.getItem('caducidades')) || [];
             db.forEach(item => {
-                calendar.addEvent({
-                    title: item.nombre,
-                    start: item.fecha,
-                    allDay: true
-                });
+                calendar.addEvent({ title: item.nombre, start: item.fecha, allDay: true });
             });
-        }
-
-        function checkTodayExpirations() {
-            let db = JSON.parse(localStorage.getItem('caducidades')) || [];
-            const hoy = new Date().toISOString().split('T')[0];
-            let caducanHoy = db.filter(item => item.fecha === hoy);
-
-            if(caducanHoy.length > 0) {
-                alert(`⚠️ Atención: Tienes ${caducanHoy.length} producto(s) que caducan hoy.`);
-            }
         }
     </script>
 </body>
